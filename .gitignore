@@ -1,6 +1,7 @@
-backend/venv/
+
+.env
 backend/.env
+backend/venv/
 backend/__pycache__/
 *.pyc
-backend/chroma_db/
-.env
+frontend/node_modules/
