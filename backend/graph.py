@@ -35,7 +35,7 @@ class ResearchReport(BaseModel):
     news_analysis: str = Field(description="Summary of recent news and its implications")
     risk_assessment: str = Field(description="Key risks from SEC filings and analysis")
     sentiment_analysis: str = Field(description="Market sentiment analysis summary")
-    recommendation: str = Field(description="Investment recommendation: BUY, HOLD, or SELL")
+    recommendation: str = Field(description="Investment recommendation: BUY, HOLD, SELL for companies — or BULLISH, NEUTRAL, BEARISH for market indices")
     recommendation_reasoning: str = Field(description="2-3 sentences explaining the recommendation")
 
 
@@ -87,7 +87,23 @@ def supervisor_node(state: ResearchState) -> dict:
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
     llm_structured = llm.with_structured_output(ResearchReport)
 
+    
+    # Detect if input is an index, ETF, or asset class
+    index_keywords = ["s&p", "dow jones", "nasdaq", "ftse", "nikkei", "russell", "etf", "index", "vix"]
+    is_index = any(kw in company.lower() for kw in index_keywords)
+
+    index_note = ""
+    if is_index:
+        index_note = f"""
+    IMPORTANT NOTE: {company} is a market index or ETF, not an individual company. 
+    - Do NOT provide a stock-specific BUY/HOLD/SELL recommendation
+    - Instead provide a MARKET OUTLOOK recommendation: BULLISH, NEUTRAL, or BEARISH
+    - Clearly state at the start of the executive summary that this is a market index analysis
+    - Focus on macroeconomic factors, constituent performance, and market trends
+    """
+
     prompt = f"""You are a senior financial analyst. Synthesize the following research into a professional investment report for {company}.
+    {index_note}
 
 NEWS RESEARCH:
 - Headlines: {news.headlines if news else 'N/A'}
