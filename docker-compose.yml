@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: stockmind
+      POSTGRES_PASSWORD: stockmind123
+      POSTGRES_DB: stockmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockmind -d stockmind"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - DATABASE_URL=postgresql://stockmind:stockmind123@db:5432/stockmind
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

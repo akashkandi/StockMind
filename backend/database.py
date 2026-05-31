@@ -1,13 +1,12 @@
 import os
+import time
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, String, Float, Text, DateTime, Integer, JSON
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
 load_dotenv()
 
-# --- Database connection ---
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://stockmind:stockmind123@localhost:5432/stockmind"
@@ -18,14 +17,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-# --- Database Models ---
 class ResearchReport(Base):
     __tablename__ = "research_reports"
 
     id = Column(Integer, primary_key=True, index=True)
     company = Column(String, index=True)
     ticker = Column(String)
-    recommendation = Column(String)  # BUY / HOLD / SELL
+    recommendation = Column(String)
     report_text = Column(Text)
     current_price = Column(Float, nullable=True)
     market_cap = Column(String, nullable=True)
@@ -39,13 +37,24 @@ class ResearchReport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-# --- Create all tables ---
 def init_db():
-    Base.metadata.create_all(bind=engine)
-    print("✅ Database tables created")
+    """Initialize database with retry logic for Docker startup"""
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("✅ Database tables created")
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 3
+                print(f"⚠️ DB not ready yet, retrying in {wait}s... ({attempt+1}/{max_retries}): {e}")
+                time.sleep(wait)
+            else:
+                print(f"❌ Failed to connect to database after {max_retries} attempts")
+                raise e
 
 
-# --- Dependency for FastAPI ---
 def get_db():
     db = SessionLocal()
     try:
