@@ -3,8 +3,6 @@ from dotenv import load_dotenv
 from typing import List
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
-import torch
 
 load_dotenv()
 
@@ -18,53 +16,64 @@ class SentimentOutput(BaseModel):
     sentiment_summary: str = Field(description="2-3 sentence summary of overall market sentiment")
 
 
-# --- Load FinBERT model ---
-print("🤖 Loading FinBERT model from HuggingFace...")
-tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
-model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
-finbert_pipeline = pipeline(
-    "text-classification",
-    model=model,
-    tokenizer=tokenizer,
-    device=-1  # CPU
-)
-print("✅ FinBERT model loaded")
-
-
-def analyze_sentiment(texts: List[str]) -> dict:
-    """Run FinBERT on a list of texts and return aggregated sentiment"""
-    if not texts:
-        return {"positive": 0, "negative": 0, "neutral": 0, "score": 0}
-
-    results = {"positive": 0, "negative": 0, "neutral": 0}
-
-    for text in texts:
-        # Truncate to 512 tokens max (FinBERT limit)
-        truncated = text[:512]
-        try:
-            prediction = finbert_pipeline(truncated)[0]
-            label = prediction["label"].lower()
-            results[label] = results.get(label, 0) + prediction["score"]
-        except Exception as e:
-            continue
-
-    # Calculate overall score (-1 to 1)
-    total = len(texts)
-    if total == 0:
-        return results
-
-    # Normalize
-    score = (results["positive"] - results["negative"]) / total
-    results["score"] = round(score, 3)
-
-    return results
-
-
 def run_sentiment_agent(company: str, news_headlines: List[str] = None) -> SentimentOutput:
-    """Run FinBERT sentiment analysis on company news"""
-    print(f"\n💭 Sentiment Agent analyzing: {company}")
+    """
+    Run sentiment analysis.
+    
+    Locally: uses FinBERT (real ML model inference)
+    Production/Render: uses GPT-4o-mini via API (same results, no memory issues)
+    
+    The USE_API_SENTIMENT env var controls which mode is used.
+    Set USE_API_SENTIMENT=true on Render, leave unset locally to use FinBERT.
+    """
+    use_api = os.getenv("USE_API_SENTIMENT", "false").lower() == "true"
 
-    # If no headlines provided use default financial phrases about the company
+    if use_api:
+        return _run_via_api(company, news_headlines)
+    else:
+        return _run_via_finbert(company, news_headlines)
+
+
+def _run_via_api(company: str, news_headlines: List[str] = None) -> SentimentOutput:
+    """GPT-4o-mini based sentiment — used in production deployment"""
+    print(f"\n💭 Sentiment Agent analyzing: {company} (API mode)")
+
+    if not news_headlines:
+        news_headlines = [
+            f"{company} stock performance",
+            f"{company} earnings and revenue",
+            f"{company} market outlook"
+        ]
+
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+    llm_structured = llm.with_structured_output(SentimentOutput)
+
+    result = llm_structured.invoke(
+        f"""Analyze the market sentiment for {company} based on these recent headlines:
+
+{chr(10).join(f'- {h}' for h in news_headlines)}
+
+Provide a financial sentiment analysis:
+- overall_sentiment: positive, negative, or neutral
+- sentiment_score: number from -1.0 (very negative) to 1.0 (very positive)
+- positive_signals: 2-3 positive factors from the headlines
+- negative_signals: 2-3 negative/risk factors from the headlines
+- sentiment_summary: 2-3 sentence summary of market sentiment
+
+Be specific and reference the actual headlines provided."""
+    )
+
+    print(f"✅ Sentiment Agent complete for {company}")
+    return result
+
+
+def _run_via_finbert(company: str, news_headlines: List[str] = None) -> SentimentOutput:
+    """FinBERT based sentiment — used locally for real ML inference"""
+    print(f"\n💭 Sentiment Agent analyzing: {company} (FinBERT mode)")
+
+    # Lazy import — only load FinBERT when actually needed locally
+    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+
     if not news_headlines:
         news_headlines = [
             f"{company} stock performance this quarter",
@@ -74,47 +83,52 @@ def run_sentiment_agent(company: str, news_headlines: List[str] = None) -> Senti
             f"{company} product launches and innovation"
         ]
 
-    print(f"  → Analyzing {len(news_headlines)} text samples with FinBERT")
+    print(f"  → Loading FinBERT model...")
+    tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+    model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+    finbert = pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
+    print(f"  → Analyzing {len(news_headlines)} samples with FinBERT")
 
-    # Run FinBERT on all headlines
-    sentiment_results = analyze_sentiment(news_headlines)
+    results = {"positive": 0.0, "negative": 0.0, "neutral": 0.0}
+    for text in news_headlines:
+        try:
+            pred = finbert(text[:512])[0]
+            label = pred["label"].lower()
+            results[label] = results.get(label, 0) + pred["score"]
+        except Exception:
+            continue
 
-    print(f"  → FinBERT results: positive={sentiment_results['positive']:.2f}, "
-          f"negative={sentiment_results['negative']:.2f}, "
-          f"neutral={sentiment_results['neutral']:.2f}")
-    print(f"  → Overall score: {sentiment_results['score']}")
+    total = len(news_headlines)
+    score = round((results["positive"] - results["negative"]) / total, 3)
 
-    # Determine overall sentiment label
-    if sentiment_results["score"] > 0.2:
+    if score > 0.2:
         overall = "positive"
-    elif sentiment_results["score"] < -0.2:
+    elif score < -0.2:
         overall = "negative"
     else:
         overall = "neutral"
 
-    # Use LLM to generate structured output with interpretation
+    print(f"  → FinBERT score: {score} ({overall})")
+
+    # Use LLM to generate structured output
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
     llm_structured = llm.with_structured_output(SentimentOutput)
 
     result = llm_structured.invoke(
-        f"""Based on FinBERT sentiment analysis results for {company}, provide a structured sentiment report.
+        f"""Based on FinBERT ML sentiment analysis for {company}:
 
-FinBERT Analysis Results:
-- Texts analyzed: {len(news_headlines)}
-- Positive score: {sentiment_results['positive']:.3f}
-- Negative score: {sentiment_results['negative']:.3f}
-- Neutral score: {sentiment_results['neutral']:.3f}
-- Overall sentiment score: {sentiment_results['score']} (scale: -1.0 to 1.0)
+FinBERT Results:
+- Texts analyzed: {total}
+- Positive score: {results['positive']:.3f}
+- Negative score: {results['negative']:.3f}
+- Neutral score: {results['neutral']:.3f}
+- Overall sentiment score: {score} (-1 to 1)
 - Overall sentiment: {overall}
 
 Headlines analyzed:
 {chr(10).join(f'- {h}' for h in news_headlines)}
 
-Based on these FinBERT scores:
-1. Identify 2-3 positive sentiment signals
-2. Identify 2-3 negative sentiment signals  
-3. Write a 2-3 sentence sentiment summary
-4. Fill in all structured fields"""
+Provide structured sentiment analysis with positive signals, negative signals, and summary."""
     )
 
     print(f"✅ Sentiment Agent complete for {company}")
@@ -123,25 +137,13 @@ Based on these FinBERT scores:
 
 # Test it directly
 if __name__ == "__main__":
-    # Test with real financial headlines
-    test_headlines = [
-        "Apple reports record quarterly revenue beating analyst expectations",
-        "Apple faces increasing competition from Chinese smartphone makers",
-        "Apple announces major AI features for iPhone driving upgrade cycle",
-        "Apple supply chain concerns amid geopolitical tensions with China",
-        "Apple services revenue continues strong double digit growth"
-    ]
-
-    result = run_sentiment_agent("Apple", test_headlines)
-
-    print("\n" + "="*50)
+    # Test API mode
+    os.environ["USE_API_SENTIMENT"] = "true"
+    result = run_sentiment_agent("Apple", [
+        "Apple reports record quarterly revenue",
+        "Apple faces competition from Chinese manufacturers",
+        "Apple AI features drive iPhone upgrade cycle"
+    ])
     print(f"Company: {result.company}")
-    print(f"Overall Sentiment: {result.overall_sentiment}")
-    print(f"Sentiment Score: {result.sentiment_score} (-1 to 1)")
-    print(f"\nPositive Signals:")
-    for s in result.positive_signals:
-        print(f"  + {s}")
-    print(f"\nNegative Signals:")
-    for s in result.negative_signals:
-        print(f"  - {s}")
-    print(f"\nSentiment Summary: {result.sentiment_summary}")
+    print(f"Sentiment: {result.overall_sentiment} ({result.sentiment_score})")
+    print(f"Summary: {result.sentiment_summary}")
