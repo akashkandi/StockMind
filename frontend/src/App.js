@@ -4,8 +4,8 @@ import ReactMarkdown from "react-markdown";
 import { RadialBarChart, RadialBar, PolarAngleAxis } from "recharts";
 import "./App.css";
 
-const API_URL = "https://stockmind-backend.onrender.com";
-const WS_URL = "wss://stockmind-backend.onrender.com";
+const API_URL = "https://stockmind-2.onrender.com";
+const WS_URL = "wss://stockmind-2.onrender.com";
 
 const AGENT_INFO = {
   news: { label: "News Agent", icon: "📰", desc: "Searching recent news..." },
