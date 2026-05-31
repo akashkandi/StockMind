@@ -64,7 +64,7 @@ User Input: "Apple"
 
 | Component | Technology |
 |---|---|
-| Agent Orchestration | LangGraph (same framework used at JPMorgan, Uber, LinkedIn) |
+| Agent Orchestration | LangGraph  |
 | Backend API | Python 3.11 + FastAPI |
 | Frontend | React 18 |
 | Real-time Streaming | WebSockets |
